@@ -1,53 +1,44 @@
-from django.shortcuts import render, get_object_or_404
-from rest_framework import viewsets, mixins
-from .models import Note
-from .serializers import NoteSerializer
+from rest_framework import viewsets, generics
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.authentication import TokenAuthentication
+from rest_framework.authtoken.models import Token
 from rest_framework.response import Response
+from django.contrib.auth.models import User
+from django.contrib.auth import authenticate
+from django.shortcuts import get_object_or_404
+from rest_framework.permissions import AllowAny
 
-#this all are class based views
+from .models import Note
+from .serializers import NoteSerializer, UserSerializer
 
-# 1-Basic ViewSet
-class BasicNoteViewSet(viewsets.ViewSet):
-    queryset = Note.objects.all()
+#  User Registration
+class UserViewSet(viewsets.ModelViewSet):
+    queryset = User.objects.all()
+    serializer_class = UserSerializer
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
 
-    def list(self, request):
-        # get all notes
-        serializer = NoteSerializer(self.queryset, many=True)
-        return Response(serializer.data)
+#  User Login - Returns Token
+class LoginView(generics.CreateAPIView):
+    permission_classes = [AllowAny]
+    def post(self, request):
+        username = request.data.get("username")
+        password = request.data.get("password")
+        user = authenticate(username=username, password=password)
 
-    def retrieve(self, request, pk=None):
-        # get individual note by id
-        note = get_object_or_404(self.queryset, pk=pk)
-        serializer = NoteSerializer(note)
-        return Response(serializer.data)
+        if user:
+            token, created = Token.objects.get_or_create(user=user)
+            return Response({"token": token.key})
+        return Response({"error": "Invalid credentials"}, status=400)
 
-    def create(self, request):
-        # Create note
-        serializer = NoteSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=201)
-        return Response(serializer.errors, status=400)
-
-    def destroy(self, request, pk=None):
-        # Delete a note by ID
-        note = get_object_or_404(self.queryset, pk=pk)
-        note.delete()
-        return Response(status=204)
-
-
-# 2-Generic ViewSet
-class GenericNoteViewSet(mixins.CreateModelMixin,
-                         mixins.RetrieveModelMixin,
-                         mixins.UpdateModelMixin,
-                         mixins.DestroyModelMixin,
-                         mixins.ListModelMixin,
-                         viewsets.GenericViewSet):
-    queryset = Note.objects.all()
+#  Notes API (Only Authenticated Users Can Access)
+class NoteViewSet(viewsets.GenericViewSet, generics.ListCreateAPIView, generics.RetrieveDestroyAPIView):
     serializer_class = NoteSerializer
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
 
+    def get_queryset(self):
+        return Note.objects.filter(user=self.request.user)
 
-# 3-Model ViewSet
-class ModelNoteViewSet(viewsets.ModelViewSet):
-    queryset = Note.objects.all()
-    serializer_class = NoteSerializer
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
